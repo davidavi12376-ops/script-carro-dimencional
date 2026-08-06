@@ -1,7 +1,7 @@
 -- ========================================
--- SCRIPT DE TAMANHO DO CARRO TODO + MENU + KEY
+-- SCRIPT DE TAMANHO DO CARRO INTEIRO + KEY
 -- Key: dzin123
--- Escala o carro inteiro
+-- Pega a pasta completa do carro
 -- ========================================
 
 local Players = game:GetService("Players")
@@ -25,34 +25,53 @@ local settings = {
 local phase = 1
 local progress = 0
 local currentVehicle = nil
-local originalData = {} -- guarda tudo do carro atual
+local originalData = {}
 
+-- Sobe até achar a pasta PRINCIPAL do carro
 local function getVehicle()
 	local char = player.Character
 	if not char then return nil end
+
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid or not humanoid.SeatPart then return nil end
-	return humanoid.SeatPart.Parent
+
+	local current = humanoid.SeatPart
+
+	-- Sobe os parents até achar o model principal do carro
+	-- (para antes de Workspace / map folders)
+	while current and current.Parent do
+		local parent = current.Parent
+
+		-- Se o parent for Workspace ou pastas de mapa, para
+		if parent == workspace or parent:IsA("WorldRoot") then
+			break
+		end
+
+		-- Se o parent parece ser o carro (tem várias BaseParts)
+		local partCount = 0
+		for _, obj in pairs(parent:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				partCount = partCount + 1
+				if partCount > 5 then break end
+			end
+		end
+
+		current = parent
+
+		-- Se já tem bastante peça, provavelmente é o carro raiz
+		if partCount > 8 then
+			break
+		end
+	end
+
+	return current
 end
 
--- Pega TODAS as partes do carro (incluindo nested)
 local function getAllParts(vehicle)
 	local parts = {}
 	for _, obj in pairs(vehicle:GetDescendants()) do
 		if obj:IsA("BasePart") then
 			table.insert(parts, obj)
-		end
-	end
-	-- Também pega partes diretas
-	for _, obj in pairs(vehicle:GetChildren()) do
-		if obj:IsA("BasePart") then
-			local found = false
-			for _, p in pairs(parts) do
-				if p == obj then found = true break end
-			end
-			if not found then
-				table.insert(parts, obj)
-			end
 		end
 	end
 	return parts
@@ -305,7 +324,7 @@ local function CreateMainMenu()
 	createControl("Cresce pros lados", 205, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 3, 0.1)
 end
 
--- ==================== TELA DE KEY ====================
+-- ==================== KEY ====================
 local KeyGui = Instance.new("ScreenGui")
 KeyGui.Name = "CarSizeKey"
 KeyGui.ResetOnSpawn = false
