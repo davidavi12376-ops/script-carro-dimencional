@@ -1,7 +1,7 @@
 -- ========================================
 -- SCRIPT DE TAMANHO DO CARRO INTEIRO + KEY
 -- Key: dzin123
--- Pega a pasta completa do carro
+-- Limite das opções: 13
 -- ========================================
 
 local Players = game:GetService("Players")
@@ -27,7 +27,6 @@ local progress = 0
 local currentVehicle = nil
 local originalData = {}
 
--- Sobe até achar a pasta PRINCIPAL do carro
 local function getVehicle()
 	local char = player.Character
 	if not char then return nil end
@@ -37,17 +36,13 @@ local function getVehicle()
 
 	local current = humanoid.SeatPart
 
-	-- Sobe os parents até achar o model principal do carro
-	-- (para antes de Workspace / map folders)
 	while current and current.Parent do
 		local parent = current.Parent
 
-		-- Se o parent for Workspace ou pastas de mapa, para
 		if parent == workspace or parent:IsA("WorldRoot") then
 			break
 		end
 
-		-- Se o parent parece ser o carro (tem várias BaseParts)
 		local partCount = 0
 		for _, obj in pairs(parent:GetDescendants()) do
 			if obj:IsA("BasePart") then
@@ -58,7 +53,6 @@ local function getVehicle()
 
 		current = parent
 
-		-- Se já tem bastante peça, provavelmente é o carro raiz
 		if partCount > 8 then
 			break
 		end
@@ -319,9 +313,10 @@ local function CreateMainMenu()
 		end)
 	end
 
-	createControl("Velocidade", 85, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 5, 0.2)
-	createControl("Cresce pra cima", 145, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 3, 0.1)
-	createControl("Cresce pros lados", 205, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 3, 0.1)
+	-- Limite 13 em tudo
+	createControl("Velocidade", 85, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 13, 0.2)
+	createControl("Cresce pra cima", 145, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 13, 0.1)
+	createControl("Cresce pros lados", 205, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 13, 0.1)
 end
 
 -- ==================== KEY ====================
