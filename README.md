@@ -1,7 +1,7 @@
 -- ========================================
--- SCRIPT DE TAMANHO DO CARRO INTEIRO + KEY
+-- SCRIPT DE TAMANHO DO CARRO (CORRIGIDO)
 -- Key: dzin123
--- Limite das opções: 13
+-- Agora dimensiona de verdade + meshes + luzes
 -- ========================================
 
 local Players = game:GetService("Players")
@@ -25,84 +25,166 @@ local settings = {
 local phase = 1
 local progress = 0
 local currentVehicle = nil
-local originalData = {}
+local originalData = {} -- [vehicle] = { [part] = {Size, MeshScale} }
 
+local LIGHT_KEYWORDS = {
+	"light", "farol", "lamp", "headlight", "taillight", "brake", "led",
+	"luz", "lanterna", "sinal", "seta", "fog", "beam", "neon", "glow"
+}
+
+local function isLightName(name)
+	name = string.lower(tostring(name or ""))
+	for _, key in ipairs(LIGHT_KEYWORDS) do
+		if string.find(name, key, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Acha o Model principal do carro
 local function getVehicle()
 	local char = player.Character
 	if not char then return nil end
 
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
-	if not humanoid or not humanoid.SeatPart then return nil end
+	if not humanoid then return nil end
 
-	local current = humanoid.SeatPart
+	local seat = humanoid.SeatPart
+	if not seat then return nil end
 
-	while current and current.Parent do
-		local parent = current.Parent
+	-- Sobe até o Model do carro
+	local model = seat:FindFirstAncestorOfClass("Model")
+	if not model then
+		return seat.Parent
+	end
 
-		if parent == workspace or parent:IsA("WorldRoot") then
-			break
+	-- Se o parent também for Model e tiver MAIS peças, sobe (carro completo)
+	while model.Parent and model.Parent:IsA("Model") and model.Parent ~= workspace do
+		local parent = model.Parent
+		local parentCount = 0
+		local currentCount = 0
+
+		for _, o in ipairs(parent:GetDescendants()) do
+			if o:IsA("BasePart") then parentCount = parentCount + 1 end
+		end
+		for _, o in ipairs(model:GetDescendants()) do
+			if o:IsA("BasePart") then currentCount = currentCount + 1 end
 		end
 
-		local partCount = 0
-		for _, obj in pairs(parent:GetDescendants()) do
-			if obj:IsA("BasePart") then
-				partCount = partCount + 1
-				if partCount > 5 then break end
-			end
-		end
-
-		current = parent
-
-		if partCount > 8 then
+		if parentCount > currentCount then
+			model = parent
+		else
 			break
 		end
 	end
 
-	return current
+	return model
+end
+
+local function getMesh(part)
+	return part:FindFirstChildOfClass("SpecialMesh")
+		or part:FindFirstChildOfClass("BlockMesh")
+		or part:FindFirstChildOfClass("CylinderMesh")
 end
 
 local function getAllParts(vehicle)
 	local parts = {}
-	for _, obj in pairs(vehicle:GetDescendants()) do
-		if obj:IsA("BasePart") then
-			table.insert(parts, obj)
+	local added = {}
+
+	local function add(part)
+		if part and part:IsA("BasePart") and not added[part] then
+			added[part] = true
+			table.insert(parts, part)
 		end
 	end
+
+	-- Tudo dentro do carro
+	for _, obj in ipairs(vehicle:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			add(obj)
+		end
+	end
+
+	-- Pastas irmãs (luzes separadas)
+	local parent = vehicle.Parent
+	if parent and parent ~= workspace then
+		for _, sibling in ipairs(parent:GetChildren()) do
+			if sibling ~= vehicle then
+				if isLightName(sibling.Name) then
+					for _, obj in ipairs(sibling:GetDescendants()) do
+						if obj:IsA("BasePart") then add(obj) end
+					end
+				else
+					for _, obj in ipairs(sibling:GetDescendants()) do
+						if obj:IsA("BasePart") and isLightName(obj.Name) then
+							add(obj)
+						end
+					end
+				end
+			end
+		end
+	end
+
 	return parts
 end
 
 local function saveOriginal(vehicle)
-	if originalData[vehicle] then return end
 	originalData[vehicle] = {}
 
-	for _, part in pairs(getAllParts(vehicle)) do
-		originalData[vehicle][part] = part.Size
+	for _, part in ipairs(getAllParts(vehicle)) do
+		local data = {
+			Size = part.Size,
+			MeshScale = nil
+		}
+		local mesh = getMesh(part)
+		if mesh then
+			data.MeshScale = mesh.Scale
+		end
+		originalData[vehicle][part] = data
 	end
 end
 
 local function applyScale(vehicle, heightMult, widthMult)
-	if not originalData[vehicle] then return end
+	local data = originalData[vehicle]
+	if not data then return end
 
-	for part, originalSize in pairs(originalData[vehicle]) do
+	for part, info in pairs(data) do
 		if part and part.Parent then
 			pcall(function()
+				-- Size da peça
 				part.Size = Vector3.new(
-					originalSize.X * widthMult,
-					originalSize.Y * heightMult,
-					originalSize.Z * widthMult
+					info.Size.X * widthMult,
+					info.Size.Y * heightMult,
+					info.Size.Z * widthMult
 				)
+
+				-- Mesh (muitos carros usam isso pro visual)
+				local mesh = getMesh(part)
+				if mesh and info.MeshScale then
+					mesh.Scale = Vector3.new(
+						info.MeshScale.X * widthMult,
+						info.MeshScale.Y * heightMult,
+						info.MeshScale.Z * widthMult
+					)
+				end
 			end)
 		end
 	end
 end
 
 local function resetScale(vehicle)
-	if not vehicle or not originalData[vehicle] then return end
+	local data = originalData[vehicle]
+	if not data then return end
 
-	for part, originalSize in pairs(originalData[vehicle]) do
+	for part, info in pairs(data) do
 		if part and part.Parent then
 			pcall(function()
-				part.Size = originalSize
+				part.Size = info.Size
+				local mesh = getMesh(part)
+				if mesh and info.MeshScale then
+					mesh.Scale = info.MeshScale
+				end
 			end)
 		end
 	end
@@ -119,15 +201,18 @@ local function startScript()
 			currentVehicle = vehicle
 			phase = 1
 			progress = 0
+			originalData[vehicle] = nil
 			if vehicle then
-				originalData[vehicle] = nil
 				saveOriginal(vehicle)
 			end
 		end
 
 		if not settings.Enabled or not vehicle then return end
 
-		saveOriginal(vehicle)
+		if not originalData[vehicle] then
+			saveOriginal(vehicle)
+		end
+
 		progress = progress + settings.Speed * dt
 
 		local heightMult = 1
@@ -185,8 +270,8 @@ local function CreateMainMenu()
 	ScreenGui.Parent = PlayerGui
 
 	local Main = Instance.new("Frame")
-	Main.Size = UDim2.new(0, 260, 0, 280)
-	Main.Position = UDim2.new(1, -280, 0.5, -140)
+	Main.Size = UDim2.new(0, 260, 0, 300)
+	Main.Position = UDim2.new(1, -280, 0.5, -150)
 	Main.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 	Main.BorderSizePixel = 0
 	Main.Active = true
@@ -231,9 +316,41 @@ local function CreateMainMenu()
 
 	MakeDraggable(Main, TitleBar)
 
+	local StatusLabel = Instance.new("TextLabel")
+	StatusLabel.Size = UDim2.new(1, -20, 0, 16)
+	StatusLabel.Position = UDim2.new(0, 10, 0, 40)
+	StatusLabel.BackgroundTransparency = 1
+	StatusLabel.Text = "Entre em um carro..."
+	StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+	StatusLabel.TextSize = 11
+	StatusLabel.Font = Enum.Font.Gotham
+	StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+	StatusLabel.Parent = Main
+
+	-- Atualiza status
+	task.spawn(function()
+		while ScreenGui.Parent do
+			local v = getVehicle()
+			if v then
+				local count = 0
+				if originalData[v] then
+					for _ in pairs(originalData[v]) do count = count + 1 end
+				else
+					count = #getAllParts(v)
+				end
+				StatusLabel.Text = "Carro: " .. v.Name .. " | Peças: " .. count
+				StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 120)
+			else
+				StatusLabel.Text = "Entre em um carro..."
+				StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+			end
+			task.wait(0.5)
+		end
+	end)
+
 	local ToggleBtn = Instance.new("TextButton")
 	ToggleBtn.Size = UDim2.new(1, -20, 0, 30)
-	ToggleBtn.Position = UDim2.new(0, 10, 0, 45)
+	ToggleBtn.Position = UDim2.new(0, 10, 0, 60)
 	ToggleBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
 	ToggleBtn.Text = "DESATIVADO"
 	ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -250,6 +367,10 @@ local function CreateMainMenu()
 		if settings.Enabled then
 			ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 90)
 			ToggleBtn.Text = "ATIVADO"
+			if currentVehicle then
+				originalData[currentVehicle] = nil
+				saveOriginal(currentVehicle)
+			end
 		else
 			ToggleBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
 			ToggleBtn.Text = "DESATIVADO"
@@ -313,10 +434,9 @@ local function CreateMainMenu()
 		end)
 	end
 
-	-- Limite 13 em tudo
-	createControl("Velocidade", 85, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 13, 0.2)
-	createControl("Cresce pra cima", 145, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 13, 0.1)
-	createControl("Cresce pros lados", 205, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 13, 0.1)
+	createControl("Velocidade", 100, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 13, 0.2)
+	createControl("Cresce pra cima", 160, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 13, 0.1)
+	createControl("Cresce pros lados", 220, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 13, 0.1)
 end
 
 -- ==================== KEY ====================
