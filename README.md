@@ -1,7 +1,7 @@
 -- ========================================
--- SCRIPT DE TAMANHO DO CARRO (CORRIGIDO)
+-- CARRO DANÇANDO (trend Yaris)
+-- Só pasta Body | sequência cima → lados
 -- Key: dzin123
--- Agora dimensiona de verdade + meshes + luzes
 -- ========================================
 
 local Players = game:GetService("Players")
@@ -10,76 +10,66 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-if PlayerGui:FindFirstChild("CarSizeMenu") then PlayerGui.CarSizeMenu:Destroy() end
-if PlayerGui:FindFirstChild("CarSizeKey") then PlayerGui.CarSizeKey:Destroy() end
+pcall(function()
+	if PlayerGui:FindFirstChild("CarDanceMenu") then PlayerGui.CarDanceMenu:Destroy() end
+	if PlayerGui:FindFirstChild("CarDanceKey") then PlayerGui.CarDanceKey:Destroy() end
+end)
+
+_G.CarDanceToken = (_G.CarDanceToken or 0) + 1
+local myToken = _G.CarDanceToken
+
+if _G.CarDanceConn then
+	pcall(function() _G.CarDanceConn:Disconnect() end)
+	_G.CarDanceConn = nil
+end
 
 local CORRECT_KEY = "dzin123"
 
 local settings = {
 	Enabled = false,
-	Speed = 1.5,
-	MaxHeight = 1.8,
-	MaxWidth = 1.6
+	Speed = 2.0,
+	MaxHeight = 1.6,
+	MaxWidth = 1.5
 }
 
 local phase = 1
 local progress = 0
 local currentVehicle = nil
-local originalData = {} -- [vehicle] = { [part] = {Size, MeshScale} }
+local bodyParts = {}
 
-local LIGHT_KEYWORDS = {
-	"light", "farol", "lamp", "headlight", "taillight", "brake", "led",
-	"luz", "lanterna", "sinal", "seta", "fog", "beam", "neon", "glow"
-}
-
-local function isLightName(name)
-	name = string.lower(tostring(name or ""))
-	for _, key in ipairs(LIGHT_KEYWORDS) do
-		if string.find(name, key, 1, true) then
-			return true
-		end
-	end
-	return false
+local function alive()
+	return _G.CarDanceToken == myToken
 end
 
--- Acha o Model principal do carro
 local function getVehicle()
 	local char = player.Character
 	if not char then return nil end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum or not hum.SeatPart then return nil end
 
-	local humanoid = char:FindFirstChildOfClass("Humanoid")
-	if not humanoid then return nil end
-
-	local seat = humanoid.SeatPart
-	if not seat then return nil end
-
-	-- Sobe até o Model do carro
+	local seat = hum.SeatPart
 	local model = seat:FindFirstAncestorOfClass("Model")
-	if not model then
-		return seat.Parent
-	end
+	if not model then return seat.Parent end
 
-	-- Se o parent também for Model e tiver MAIS peças, sobe (carro completo)
 	while model.Parent and model.Parent:IsA("Model") and model.Parent ~= workspace do
 		local parent = model.Parent
-		local parentCount = 0
-		local currentCount = 0
-
+		local p, c = 0, 0
 		for _, o in ipairs(parent:GetDescendants()) do
-			if o:IsA("BasePart") then parentCount = parentCount + 1 end
+			if o:IsA("BasePart") then p = p + 1 end
 		end
 		for _, o in ipairs(model:GetDescendants()) do
-			if o:IsA("BasePart") then currentCount = currentCount + 1 end
+			if o:IsA("BasePart") then c = c + 1 end
 		end
-
-		if parentCount > currentCount then
-			model = parent
-		else
-			break
-		end
+		if p > c then model = parent else break end
 	end
-
 	return model
+end
+
+local function getRoot(vehicle)
+	return vehicle.PrimaryPart
+		or vehicle:FindFirstChild("DriveSeat")
+		or vehicle:FindFirstChildWhichIsA("VehicleSeat")
+		or vehicle:FindFirstChildWhichIsA("BasePart")
 end
 
 local function getMesh(part)
@@ -88,158 +78,162 @@ local function getMesh(part)
 		or part:FindFirstChildOfClass("CylinderMesh")
 end
 
-local function getAllParts(vehicle)
-	local parts = {}
-	local added = {}
+local function ensureOriginal(part)
+	if not part:GetAttribute("CD_OrigSize") then
+		part:SetAttribute("CD_OrigSize", part.Size)
+	end
+	local mesh = getMesh(part)
+	if mesh and not mesh:GetAttribute("CD_OrigScale") then
+		mesh:SetAttribute("CD_OrigScale", mesh.Scale)
+	end
+end
 
+local function getOrigSize(part)
+	local v = part:GetAttribute("CD_OrigSize")
+	if typeof(v) == "Vector3" then return v end
+	return part.Size
+end
+
+local function getOrigMesh(mesh)
+	local v = mesh:GetAttribute("CD_OrigScale")
+	if typeof(v) == "Vector3" then return v end
+	return mesh.Scale
+end
+
+local function collectBodyFolderParts(vehicle)
+	local list, seen = {}, {}
 	local function add(part)
-		if part and part:IsA("BasePart") and not added[part] then
-			added[part] = true
-			table.insert(parts, part)
+		if part and part:IsA("BasePart") and not seen[part] then
+			seen[part] = true
+			ensureOriginal(part)
+			table.insert(list, part)
 		end
 	end
 
-	-- Tudo dentro do carro
-	for _, obj in ipairs(vehicle:GetDescendants()) do
-		if obj:IsA("BasePart") then
-			add(obj)
+	local function findBody(parent)
+		for _, child in ipairs(parent:GetChildren()) do
+			if string.lower(child.Name) == "body" then
+				for _, o in ipairs(child:GetDescendants()) do
+					if o:IsA("BasePart") then add(o) end
+				end
+				if child:IsA("BasePart") then add(child) end
+			else
+				findBody(child)
+			end
 		end
 	end
 
-	-- Pastas irmãs (luzes separadas)
+	findBody(vehicle)
+
 	local parent = vehicle.Parent
 	if parent and parent ~= workspace then
 		for _, sibling in ipairs(parent:GetChildren()) do
-			if sibling ~= vehicle then
-				if isLightName(sibling.Name) then
-					for _, obj in ipairs(sibling:GetDescendants()) do
-						if obj:IsA("BasePart") then add(obj) end
-					end
-				else
-					for _, obj in ipairs(sibling:GetDescendants()) do
-						if obj:IsA("BasePart") and isLightName(obj.Name) then
-							add(obj)
-						end
-					end
+			if sibling ~= vehicle and string.lower(sibling.Name) == "body" then
+				for _, o in ipairs(sibling:GetDescendants()) do
+					if o:IsA("BasePart") then add(o) end
 				end
 			end
 		end
 	end
-
-	return parts
+	return list
 end
 
-local function saveOriginal(vehicle)
-	originalData[vehicle] = {}
-
-	for _, part in ipairs(getAllParts(vehicle)) do
-		local data = {
-			Size = part.Size,
-			MeshScale = nil
-		}
-		local mesh = getMesh(part)
-		if mesh then
-			data.MeshScale = mesh.Scale
-		end
-		originalData[vehicle][part] = data
-	end
-end
-
-local function applyScale(vehicle, heightMult, widthMult)
-	local data = originalData[vehicle]
-	if not data then return end
-
-	for part, info in pairs(data) do
+local function applyScale(h, w)
+	for _, part in ipairs(bodyParts) do
 		if part and part.Parent then
 			pcall(function()
-				-- Size da peça
-				part.Size = Vector3.new(
-					info.Size.X * widthMult,
-					info.Size.Y * heightMult,
-					info.Size.Z * widthMult
-				)
-
-				-- Mesh (muitos carros usam isso pro visual)
+				local orig = getOrigSize(part)
+				part.Size = Vector3.new(orig.X * w, orig.Y * h, orig.Z * w)
 				local mesh = getMesh(part)
-				if mesh and info.MeshScale then
-					mesh.Scale = Vector3.new(
-						info.MeshScale.X * widthMult,
-						info.MeshScale.Y * heightMult,
-						info.MeshScale.Z * widthMult
-					)
+				if mesh then
+					local mo = getOrigMesh(mesh)
+					mesh.Scale = Vector3.new(mo.X * w, mo.Y * h, mo.Z * w)
 				end
 			end)
 		end
 	end
 end
 
-local function resetScale(vehicle)
-	local data = originalData[vehicle]
-	if not data then return end
-
-	for part, info in pairs(data) do
+local function resetAll()
+	for _, part in ipairs(bodyParts) do
 		if part and part.Parent then
 			pcall(function()
-				part.Size = info.Size
+				part.Size = getOrigSize(part)
 				local mesh = getMesh(part)
-				if mesh and info.MeshScale then
-					mesh.Scale = info.MeshScale
+				if mesh then
+					mesh.Scale = getOrigMesh(mesh)
 				end
 			end)
 		end
 	end
 end
 
-local function startScript()
-	RunService.RenderStepped:Connect(function(dt)
+local function startLoop()
+	if _G.CarDanceConn then
+		pcall(function() _G.CarDanceConn:Disconnect() end)
+		_G.CarDanceConn = nil
+	end
+
+	_G.CarDanceConn = RunService.Heartbeat:Connect(function(dt)
+		if not alive() then return end
+		if not settings.Enabled then return end
+
 		local vehicle = getVehicle()
 
 		if vehicle ~= currentVehicle then
-			if currentVehicle then
-				resetScale(currentVehicle)
-			end
+			if currentVehicle then resetAll() end
 			currentVehicle = vehicle
 			phase = 1
 			progress = 0
-			originalData[vehicle] = nil
+			bodyParts = {}
 			if vehicle then
-				saveOriginal(vehicle)
+				bodyParts = collectBodyFolderParts(vehicle)
 			end
 		end
 
-		if not settings.Enabled or not vehicle then return end
+		if not vehicle then return end
+		if #bodyParts == 0 then
+			bodyParts = collectBodyFolderParts(vehicle)
+		end
 
-		if not originalData[vehicle] then
-			saveOriginal(vehicle)
+		local root = getRoot(vehicle)
+		local linVel, angVel
+		if root then
+			linVel = root.AssemblyLinearVelocity
+			angVel = root.AssemblyAngularVelocity
 		end
 
 		progress = progress + settings.Speed * dt
 
-		local heightMult = 1
-		local widthMult = 1
-
+		local h, w = 1, 1
+		-- Dança: sobe → volta → lados → volta
 		if phase == 1 then
-			heightMult = 1 + (settings.MaxHeight - 1) * math.min(progress, 1)
+			h = 1 + (settings.MaxHeight - 1) * math.min(progress, 1)
 			if progress >= 1 then progress = 0 phase = 2 end
 		elseif phase == 2 then
-			heightMult = settings.MaxHeight - (settings.MaxHeight - 1) * math.min(progress, 1)
+			h = settings.MaxHeight - (settings.MaxHeight - 1) * math.min(progress, 1)
 			if progress >= 1 then progress = 0 phase = 3 end
 		elseif phase == 3 then
-			widthMult = 1 + (settings.MaxWidth - 1) * math.min(progress, 1)
+			w = 1 + (settings.MaxWidth - 1) * math.min(progress, 1)
 			if progress >= 1 then progress = 0 phase = 4 end
 		elseif phase == 4 then
-			widthMult = settings.MaxWidth - (settings.MaxWidth - 1) * math.min(progress, 1)
+			w = settings.MaxWidth - (settings.MaxWidth - 1) * math.min(progress, 1)
 			if progress >= 1 then progress = 0 phase = 1 end
 		end
 
-		applyScale(vehicle, heightMult, widthMult)
+		applyScale(h, w)
+
+		if root and linVel and angVel then
+			pcall(function()
+				root.AssemblyLinearVelocity = linVel
+				root.AssemblyAngularVelocity = angVel
+			end)
+		end
 	end)
 end
 
 local function MakeDraggable(frame, handle)
-	local dragging = false
-	local dragStart, startPos
-
+	local dragging, dragStart, startPos = false, nil, nil
 	handle.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
@@ -254,7 +248,6 @@ local function MakeDraggable(frame, handle)
 			end)
 		end
 	end)
-
 	UserInputService.InputChanged:Connect(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local delta = input.Position - dragStart
@@ -265,7 +258,7 @@ end
 
 local function CreateMainMenu()
 	local ScreenGui = Instance.new("ScreenGui")
-	ScreenGui.Name = "CarSizeMenu"
+	ScreenGui.Name = "CarDanceMenu"
 	ScreenGui.ResetOnSpawn = false
 	ScreenGui.Parent = PlayerGui
 
@@ -307,7 +300,7 @@ local function CreateMainMenu()
 	Title.Size = UDim2.new(1, -10, 1, 0)
 	Title.Position = UDim2.new(0, 10, 0, 0)
 	Title.BackgroundTransparency = 1
-	Title.Text = "Tamanho do Carro"
+	Title.Text = "Carro Dançando"
 	Title.TextColor3 = Color3.fromRGB(230, 230, 230)
 	Title.TextSize = 14
 	Title.Font = Enum.Font.GothamBold
@@ -327,24 +320,19 @@ local function CreateMainMenu()
 	StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 	StatusLabel.Parent = Main
 
-	-- Atualiza status
 	task.spawn(function()
-		while ScreenGui.Parent do
+		while ScreenGui.Parent and alive() do
 			local v = getVehicle()
 			if v then
-				local count = 0
-				if originalData[v] then
-					for _ in pairs(originalData[v]) do count = count + 1 end
-				else
-					count = #getAllParts(v)
-				end
-				StatusLabel.Text = "Carro: " .. v.Name .. " | Peças: " .. count
-				StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 120)
+				local n = #bodyParts
+				if n == 0 then n = #collectBodyFolderParts(v) end
+				StatusLabel.Text = "Carro: " .. v.Name .. " | Body: " .. n
+				StatusLabel.TextColor3 = n > 0 and Color3.fromRGB(100, 200, 120) or Color3.fromRGB(255, 150, 80)
 			else
 				StatusLabel.Text = "Entre em um carro..."
 				StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
 			end
-			task.wait(0.5)
+			task.wait(0.4)
 		end
 	end)
 
@@ -363,19 +351,23 @@ local function CreateMainMenu()
 	ToggleCorner.Parent = ToggleBtn
 
 	ToggleBtn.MouseButton1Click:Connect(function()
-		settings.Enabled = not settings.Enabled
+		if not alive() then return end
+
 		if settings.Enabled then
-			ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 90)
-			ToggleBtn.Text = "ATIVADO"
-			if currentVehicle then
-				originalData[currentVehicle] = nil
-				saveOriginal(currentVehicle)
-			end
-		else
+			settings.Enabled = false
 			ToggleBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
 			ToggleBtn.Text = "DESATIVADO"
-			if currentVehicle then
-				resetScale(currentVehicle)
+			resetAll()
+			phase = 1
+			progress = 0
+		else
+			settings.Enabled = true
+			ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 90)
+			ToggleBtn.Text = "DANÇANDO"
+			local v = getVehicle()
+			if v then
+				currentVehicle = v
+				bodyParts = collectBodyFolderParts(v)
 			end
 			phase = 1
 			progress = 0
@@ -426,7 +418,6 @@ local function CreateMainMenu()
 			setValue(v)
 			label.Text = name .. ": " .. string.format("%.1f", v)
 		end)
-
 		plus.MouseButton1Click:Connect(function()
 			local v = math.min(max, getValue() + step)
 			setValue(v)
@@ -434,14 +425,14 @@ local function CreateMainMenu()
 		end)
 	end
 
-	createControl("Velocidade", 100, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 13, 0.2)
-	createControl("Cresce pra cima", 160, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 13, 0.1)
-	createControl("Cresce pros lados", 220, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 13, 0.1)
+	createControl("Velocidade da dança", 100, function() return settings.Speed end, function(v) settings.Speed = v end, 0.3, 13, 0.2)
+	createControl("Estica pra cima", 160, function() return settings.MaxHeight end, function(v) settings.MaxHeight = v end, 1.1, 13, 0.1)
+	createControl("Expande pro lado", 220, function() return settings.MaxWidth end, function(v) settings.MaxWidth = v end, 1.1, 13, 0.1)
 end
 
 -- ==================== KEY ====================
 local KeyGui = Instance.new("ScreenGui")
-KeyGui.Name = "CarSizeKey"
+KeyGui.Name = "CarDanceKey"
 KeyGui.ResetOnSpawn = false
 KeyGui.Parent = PlayerGui
 
@@ -521,7 +512,7 @@ local function tryKey()
 	if KeyBox.Text == CORRECT_KEY then
 		KeyGui:Destroy()
 		CreateMainMenu()
-		startScript()
+		startLoop()
 	else
 		ErrorLabel.Text = "Key incorreta!"
 		KeyBox.Text = ""
